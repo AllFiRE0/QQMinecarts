@@ -1,0 +1,34 @@
+name: QQMinecarts
+version: '1.0.0'
+main: dev.qm.qqminecarts.QQMinecarts
+api-version: '1.21.11'
+folia-supported: true
+description: Быстрые вагонетки с плавным переключением скоростей (клавиша F / ЛКМ)
+website: https://github.com/AllF1RE
+author: AllF1RE
+
+commands:
+  qqm:
+    description: Основная команда QQMinecarts
+    aliases: [ qqminecarts, qmc ]
+    usage: /qqm reload
+    permission: qqminecarts.use
+
+permissions:
+  qqminecarts.use:
+    description: Доступ к механикам вагонеток
+    default: true
+  qqminecarts.bypass:
+    description: Игнорировать disabled-worlds (механики работают в любых мирах)
+    default: false
+  qqminecarts.reload:
+    description: Перезагрузка конфигурации (/qqm reload)
+    default: op
+  qqminecarts.admin:
+    description: Полный доступ к администрированию плагина
+    default: op
+    children:
+      qqminecarts.reload: true
+  qqminecarts.speed.default:
+    description: Доступ к обычной (ванильной) скорости
+    default: true

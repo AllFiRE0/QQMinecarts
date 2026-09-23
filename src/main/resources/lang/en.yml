@@ -1,0 +1,16 @@
+# English language files for QQMinecarts
+# You can use color codes: &0-&f, also &x&... (HEX)
+messages:
+  prefix: "&8[&bQQMinecarts&8] &r"
+  no-permission: "&cYou don't have permission to do that."
+  only-player: "&cThis command can only be used by a player."
+  wrong-usage: "&cUsage: &6/&bqqm&f reload"
+  reloading: "&eReloading configuration..."
+  reloaded: "&aConfiguration reloaded successfully."
+  reload-failed: "&cFailed to reload configuration. See console."
+  disabled-world: "&cQQMinecarts minecart mechanics are disabled in this world."
+  speed-level-denied: "&cYou don't have permission to use speed level &6{level}&c."
+  cycle-to: "&bMinecart speed: &6{level} &7({speed})"
+  actionbar: "&7Speed: &f{level} &8| &f{speed}"
+  bossbar-title: "Minecart speed: {level}"
+  level-default: "default"

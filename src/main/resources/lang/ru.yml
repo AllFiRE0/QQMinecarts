@@ -1,0 +1,16 @@
+# Русский язык сообщений QQMinecarts
+# Можно использовать цветовые коды: &0-&f, а также &x&... (HEX)
+messages:
+  prefix: "&8[&bQQMinecarts&8] &r"
+  no-permission: "&cУ вас недостаточно прав."
+  only-player: "&cЭта команда доступна только игроку."
+  wrong-usage: "&cИспользование: &6/&bqqm&f reload"
+  reloading: "&eПерезагрузка конфигурации..."
+  reloaded: "&aКонфигурация успешно перезагружена."
+  reload-failed: "&cНе удалось перезагрузить конфигурацию. Смотрите консоль."
+  disabled-world: "&cВ этом мире механики вагонеток QQMinecarts отключены."
+  speed-level-denied: "&cУ вас нет прав на уровень скорости &6{level}&c."
+  cycle-to: "&bСкорость вагонетки: &6{level} &7({speed})"
+  actionbar: "&7Скорость: &f{level} &8| &f{speed}"
+  bossbar-title: "Скорость вагонетки: {level}"
+  level-default: "обычная"
