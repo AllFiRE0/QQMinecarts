@@ -5,6 +5,7 @@ import dev.qm.qqminecarts.config.ConfigManager;
 import dev.qm.qqminecarts.listener.InputListener;
 import dev.qm.qqminecarts.listener.VehicleListener;
 import dev.qm.qqminecarts.manager.SpeedManager;
+import dev.qm.qqminecarts.placeholder.QQExpansion;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -17,13 +18,14 @@ import java.util.logging.Level;
 /**
  * Главный класс плагина QQMinecarts.
  *
- * Плагин добавляет механики скоростных вагонеток:
- * - клавиша F или ЛКМ в воздухе — переключение скорости по кругу
- *   (default -> 1 -> 2 -> ... -> max -> default);
- * - скорость меняется плавно: задержка (delay-ticks), затем шаги
- *   (step каждые interval-ticks);
- * - на уровне "default" работает ванильное управление с клавиши W;
- * - на уровнях 1+ вагонетка едет сама.
+ * Плагин добавляет механику скоростных вагонеток:
+ * - клавиша F, сидя в вагонетке, — следующий уровень скорости
+ *   (1 -> 2 -> ... -> max) из speed-levels / powered-speed-levels;
+ *   каждый уровень — прибавка поверх текущей скорости рельс;
+ * - прибавка меняется плавно за transition.ramp-ticks после выбора уровня;
+ * - на поворотах скорость подрезается до curve-max-speed (не слетает с рельс);
+ * - клавиша прыжка (ПРОБЕЛ) сбрасывает скорость к обычной (на энергорельсах
+ *   полностью останавливает); ЛКМ плагином не используется.
  *
  * Требования к версиям: Paper/Leaf 1.21.11 и новее (проверено на 26.2 локальной
  * сборке Leaf). Вся "тяжёлая" работа выполняется не в основном потоке:
@@ -60,8 +62,19 @@ public final class QQMinecarts extends JavaPlugin {
                 command.setTabCompleter(executor);
             }
 
+            // PlaceholderAPI (мягкая зависимость): расширение регистрируем
+            // только если PAPI реально установлен на сервере
+            if (getServer().getPluginManager().getPlugin("PlaceholderAPI") != null) {
+                try {
+                    new QQExpansion(speedManager).register();
+                    getLogger().info("Расширение PlaceholderAPI 'qqminecarts' зарегистрировано.");
+                } catch (Throwable t) {
+                    getLogger().warning("Не удалось зарегистрировать расширение PlaceholderAPI: " + t.getMessage());
+                }
+            }
+
             debug("Запуск завершён за " + (System.nanoTime() - start) / 1_000_000 + " мс");
-            getLogger().info("QQMinecarts включён. Переключение скорости: клавиша F / ЛКМ в вагонетке.");
+            getLogger().info("QQMinecarts включён. Уровни скорости: клавиша F, сброс — пробел.");
         } catch (Throwable t) {
             getLogger().log(Level.SEVERE, "Критическая ошибка при включении QQMinecarts", t);
             getServer().getPluginManager().disablePlugin(this);

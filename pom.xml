@@ -6,11 +6,11 @@
 
     <groupId>dev.qm</groupId>
     <artifactId>QQMinecarts</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
     <packaging>jar</packaging>
 
     <name>QQMinecarts</name>
-    <description>Быстрые вагонетки с плавным переключением скоростей (F/ЛКМ) для Paper/Leaf 1.21.11–26.3+</description>
+    <description>Быстрые вагонетки и езда на животных с уровнями скорости (F — уровень, пробел — сброс) + PAPI-плейсхолдеры для Paper/Leaf 1.21.11–26.3+</description>
     <url>https://github.com/AllF1RE</url>
 
     <properties>
@@ -19,7 +19,7 @@
 
         <!-- API ядра Leaf 26.2 (форк Paper с регионами). https://github.com/Winds-Studio/Leaf -->
         <!-- Если появятся версии 26.3+ — просто обновите эту версию. -->
-        <leaf.version>26.2.local-SNAPSHOT</leaf.version>
+        <leaf.version>26.2.local-20260909.114601-62</leaf.version>
     </properties>
 
     <repositories>
@@ -31,6 +31,10 @@
             <id>papermc</id>
             <url>https://repo.papermc.io/repository/maven-public/</url>
         </repository>
+        <repository>
+            <id>extendedclip</id>
+            <url>https://repo.extendedclip.com/releases/</url>
+        </repository>
     </repositories>
 
     <dependencies>
@@ -39,6 +43,13 @@
             <groupId>cn.dreeam.leaf</groupId>
             <artifactId>leaf-api</artifactId>
             <version>${leaf.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- PlaceholderAPI (для компиляции/регистрации расширения; на сервере есть реально работающий PAPI) -->
+        <dependency>
+            <groupId>me.clip</groupId>
+            <artifactId>placeholderapi</artifactId>
+            <version>2.11.6</version>
             <scope>provided</scope>
         </dependency>
     </dependencies>

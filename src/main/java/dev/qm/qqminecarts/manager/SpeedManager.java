@@ -4,7 +4,7 @@ import dev.qm.qqminecarts.QQMinecarts;
 import dev.qm.qqminecarts.config.ConfigManager;
 import dev.qm.qqminecarts.config.Messages;
 import dev.qm.qqminecarts.config.PluginConfig;
-import dev.qm.qqminecarts.config.SpeedLevel;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Minecart;
 import org.bukkit.entity.Player;
 
@@ -13,49 +13,31 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Центральный менеджер: привязывает игроков к их вагонеткам, обрабатывает
- * ввод (клавиша W), право на уровни и переключение скорости.
+ * Центральный менеджер: привязывает игроков к их вагонеткам и езде верхом,
+ * обрабатывает ввод (клавиша F, пробел, W/S) и уровень скорости.
  *
  * Все изменяемые коллекции — потокобезопасные (ConcurrentHashMap),
  * потому что события и задачи приходят из разных потоков (регион игрока,
- * регион вагонетки, глобальный планировщик).
+ * регион транспорта, глобальный планировщик).
  */
 public final class SpeedManager {
 
     public static final String PERM_USE = "qqminecarts.use";
     public static final String PERM_BYPASS = "qqminecarts.bypass";
 
-    /** Базовое право на уровень скорости: qqminecarts.speed.<key> */
-    public static final String PERM_SPEED = "qqminecarts.speed.";
-
-    /** Время (в наносекундах), после которого отсутствие инпута
-     *  считается "клавиша W отпущена". 0.4 секунды. */
-    private static final long INPUT_TIMEOUT_NANOS = 400_000_000L;
-
-    /** Окно, в котором ЛКМ считается ударом по сущности, а не кликом в воздухе. */
-    private static final long ATTACK_RECENT_NANOS = 700_000_000L;
-
-    /** Состояние ввода игрока — обновляется из события PlayerInputEvent
-     *  (поток региона игрока), читается в задаче вагонетки (поток региона
-     *  вагонетки). Поля volatile для безопасной межпотоковой видимости. */
-    static final class InputState {
-        volatile boolean forward;
-        volatile long lastInputNanos = System.nanoTime();
-    }
-
     private final QQMinecarts plugin;
     private final ConfigManager configManager;
 
     /** Активные контроллеры: UUID игрока -> контроллер вагонетки. */
     private final Map<UUID, MinecartController> controllers = new ConcurrentHashMap<>();
-    /** Ввод игроков (клавиша W и др.). */
-    private final Map<UUID, InputState> inputStates = new ConcurrentHashMap<>();
-    /** Время последнего удара в вагонетке (для распознавания "ЛКМ по сущности"). */
-    private final Map<UUID, Long> lastAttackNanos = new ConcurrentHashMap<>();
+
+    /** Езда верхом на животных. */
+    private final RideController rideController;
 
     public SpeedManager(QQMinecarts plugin, ConfigManager configManager) {
         this.plugin = plugin;
         this.configManager = configManager;
+        this.rideController = new RideController(this);
     }
 
     // ================== ДОСТУП К ДАННЫМ ==================
@@ -66,7 +48,9 @@ public final class SpeedManager {
 
     public Messages messages() { return configManager.messages(); }
 
-    public boolean isBusy(UUID playerId) { return controllers.containsKey(playerId); }
+    public boolean isBusy(UUID playerId) {
+        return controllers.containsKey(playerId) || rideController.has(playerId);
+    }
 
     // ================== ПРИВЯЗКА / ОТВЯЗКА ==================
 
@@ -87,42 +71,80 @@ public final class SpeedManager {
             controllers.put(playerId, controller);
             plugin.debug("Привязка: " + player.getName() + " -> вагонетка #" + cart.getUniqueId());
         } else {
-            player.sendMessage(messages().get("messages.disabled-world"));
+            messages().sendMessage(player, "messages.disabled-world");
         }
     }
 
-    /** Игрок покинул вагонетку или вышел — останавливаем управление. */
+    /** Игрок сел на животное — запускаем управление (если тип разрешён в конфиге). */
+    public void attachRide(Player player, Entity vehicle) {
+        rideController.attach(player, vehicle);
+    }
+
+    /** Игрок покинул транспорт или вышел — останавливаем управление. */
     public void detach(UUID playerId) {
         MinecartController controller = controllers.remove(playerId);
         if (controller != null) {
             controller.cancel();
         }
+        rideController.detach(playerId);
     }
 
-    // ================== ПЕРЕКЛЮЧЕНИЕ СКОРОСТИ ==================
+    /** Внутренняя очистка после завершения тик-задачи езды верхом. */
+    void detachRide(UUID playerId) {
+        rideController.detach(playerId);
+    }
 
-    /** Переключение скорости на следующий уровень (F или ЛКМ). */
+    /** Разрешена ли механика езды верхом на этой сущности. */
+    public boolean isRideable(Entity vehicle) {
+        return rideController.isRideable(vehicle);
+    }
+
+    // ================== УРОВЕНЬ СКОРОСТИ ==================
+
+    /** Клавиша F: следующий уровень скорости (вагонетка или езда верхом). */
     public boolean cycle(Player player) {
         UUID playerId = player.getUniqueId();
         MinecartController controller = controllers.get(playerId);
-        if (controller == null) return false;
+        boolean riding = controller == null && rideController.has(playerId);
+        if (controller == null && !riding) return false;
 
         if (!isWorldAllowed(player.getWorld().getName(), player)) {
-            player.sendMessage(messages().get("messages.disabled-world"));
+            messages().sendMessage(player, "messages.disabled-world");
             return false;
         }
 
-        // Проверка права на следующий уровень (если включено в конфиге)
-        if (config().permissionPerLevel()) {
-            SpeedLevel next = controller.nextLevel();
-            if (!next.isDefault() && !player.hasPermission(PERM_SPEED + next.key())) {
-                player.sendMessage(messages().get("messages.speed-level-denied", "level", next.key()));
-                return false;
-            }
+        if (!player.hasPermission(PERM_USE)) {
+            messages().sendMessage(player, "messages.no-permission");
+            return false;
         }
 
-        controller.cycle();
-        return true;
+        if (controller != null) {
+            return controller.boost();
+        }
+        return rideController.cycle(player);
+    }
+
+    /** Пробел: сброс/остановка. holdingMoveKeys — игрок держит вперёд/назад. */
+    public boolean reset(Player player, boolean holdingMoveKeys) {
+        UUID playerId = player.getUniqueId();
+        MinecartController controller = controllers.get(playerId);
+        if (controller != null) {
+            return controller.reset(holdingMoveKeys);
+        }
+        return rideController.reset(player);
+    }
+
+    /** Игрок нажал клавиши движения (W/S): запоминаем состояние для авто-разгона
+     *  и отпускаем тормоз остановки на энергорельсе. Для езды верхом W/S —
+     *  признак, что игрок "скачет". */
+    public boolean onMoveKeys(Player player, boolean forward, boolean backward) {
+        MinecartController controller = controllers.get(player.getUniqueId());
+        if (controller != null) {
+            controller.setMovementKeys(forward, backward);
+            return true;
+        }
+        rideController.setForwardHeld(player.getUniqueId(), forward);
+        return rideController.has(player.getUniqueId());
     }
 
     /** Разрешена ли механика в указанном мире (надо ли проверять право bypass). */
@@ -132,41 +154,65 @@ public final class SpeedManager {
         return player.hasPermission(PERM_BYPASS);
     }
 
-    // ================== ВВОД (КЛАВИША W) ==================
+    // ================== ДАННЫЕ ДЛЯ ПЛЕЙСХОЛДЕРОВ ==================
 
-    /** Обновление ввода из PlayerInputEvent. */
-    public void handleInput(Player player, boolean forward) {
+    public boolean hasMinecart(UUID playerId) {
+        return controllers.containsKey(playerId);
+    }
+
+    public boolean hasRide(UUID playerId) {
+        return rideController.has(playerId);
+    }
+
+    /** Выбранный уровень скорости (0 — обычная). */
+    public int level(Player player) {
         UUID playerId = player.getUniqueId();
-        InputState state = inputStates.computeIfAbsent(playerId, k -> new InputState());
-        state.forward = forward;
-        state.lastInputNanos = System.nanoTime();
+        MinecartController controller = controllers.get(playerId);
+        if (controller != null) {
+            return controller.currentLevelIndex();
+        }
+        return rideController.level(playerId);
     }
 
-    /** Зажата ли W в данный момент (с учётом таймаута отсутствия инпута). */
-    public boolean isForwardHeld(UUID playerId) {
-        InputState state = inputStates.get(playerId);
-        return state != null
-                && state.forward
-                && (System.nanoTime() - state.lastInputNanos) < INPUT_TIMEOUT_NANOS;
+    /** Прибавка выбранного уровня (блоков в тик). 0 — обычная скорость. */
+    public double levelBoost(Player player) {
+        UUID playerId = player.getUniqueId();
+        MinecartController controller = controllers.get(playerId);
+        if (controller != null) {
+            return controller.selectedLevelSpeed();
+        }
+        return rideController.selectedLevelSpeed(playerId);
     }
 
-    // ================== РАСПОЗНАВАНИЕ "ЛКМ ПО СУЩЕСТВУ" ==================
-
-    /** Запоминаем, что игрок только что ударил сущность. */
-    public void markAttack(Player player) {
-        lastAttackNanos.put(player.getUniqueId(), System.nanoTime());
+    /** Базовая максимальная скорость транспорта (вагонетка без учёта бонуса
+     *  — как в purpur.yml; животное — его атрибут скорости). 0 — не в транспорте. */
+    public double baseMaxSpeed(Player player) {
+        UUID playerId = player.getUniqueId();
+        MinecartController controller = controllers.get(playerId);
+        if (controller != null) {
+            return controller.baseMaxSpeed();
+        }
+        double ride = rideController.baseMaxSpeed(playerId);
+        if (ride >= 0) {
+            return ride;
+        }
+        Entity vehicle = player.getVehicle();
+        if (vehicle instanceof Minecart) {
+            // В вагонетке, но без привязки (нет прав/мир отключён) — всё равно
+            // отдаём реальную максимальную скорость рельс из самой вагонетки.
+            return ((Minecart) vehicle).getMaxSpeed();
+        }
+        return 0.0;
     }
 
-    /** Была ли атака сущности совсем недавно (удар, а не клик в воздухе). */
-    public boolean attackedRecently(Player player) {
-        Long t = lastAttackNanos.get(player.getUniqueId());
-        return t != null && (System.nanoTime() - t) < ATTACK_RECENT_NANOS;
-    }
-
-    /** Очистка вспомогательных данных игрока при отвязке. */
-    void forget(UUID playerId) {
-        inputStates.remove(playerId);
-        lastAttackNanos.remove(playerId);
+    /** Текущая скорость движения (км/ч) из кэша контроллера, либо 0. */
+    public double speedKmh(Player player) {
+        UUID playerId = player.getUniqueId();
+        MinecartController controller = controllers.get(playerId);
+        if (controller != null) {
+            return controller.speedKmh();
+        }
+        return rideController.speedKmh(playerId);
     }
 
     // ================== ЗАВЕРШЕНИЕ ==================
@@ -175,7 +221,6 @@ public final class SpeedManager {
     public void shutdown() {
         controllers.values().forEach(MinecartController::cancel);
         controllers.clear();
-        inputStates.clear();
-        lastAttackNanos.clear();
+        rideController.shutdown();
     }
 }

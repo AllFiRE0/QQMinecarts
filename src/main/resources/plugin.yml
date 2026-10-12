@@ -1,11 +1,13 @@
 name: QQMinecarts
-version: '1.0.0'
+version: '1.1.0'
 main: dev.qm.qqminecarts.QQMinecarts
 api-version: '1.21.11'
 folia-supported: true
-description: Быстрые вагонетки с плавным переключением скоростей (клавиша F / ЛКМ)
+description: "Быстрые вагонетки и езда верхом: режим manual (F = уровень, пробел = сброс) или auto (разгон временем, поворот снимает скорость). Плейсхолдеры qqminecarts_* через PlaceholderAPI."
 website: https://github.com/AllF1RE
 author: AllF1RE
+softdepend:
+  - PlaceholderAPI
 
 commands:
   qqm:
@@ -29,6 +31,3 @@ permissions:
     default: op
     children:
       qqminecarts.reload: true
-  qqminecarts.speed.default:
-    description: Доступ к обычной (ванильной) скорости
-    default: true

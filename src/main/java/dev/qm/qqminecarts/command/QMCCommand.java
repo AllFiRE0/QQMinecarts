@@ -33,7 +33,7 @@ public final class QMCCommand implements CommandExecutor, TabCompleter {
                              @NotNull String label, @NotNull String[] args) {
         try {
             if (args.length == 0) {
-                sender.sendMessage(speedManager.messages().get("messages.wrong-usage"));
+                speedManager.messages().sendMessage(sender, "messages.wrong-usage");
                 return true;
             }
 
@@ -41,19 +41,19 @@ public final class QMCCommand implements CommandExecutor, TabCompleter {
                 case "reload":
                 case "rl": {
                     if (!canReload(sender)) {
-                        sender.sendMessage(speedManager.messages().get("messages.no-permission"));
+                        speedManager.messages().sendMessage(sender, "messages.no-permission");
                         return true;
                     }
-                    sender.sendMessage(speedManager.messages().get("messages.reloading"));
+                    speedManager.messages().sendMessage(sender, "messages.reloading");
                     // Перезагрузка выполняется в фоновом потоке; колбэк приходит
                     // из global-region потока (не блокирует основной тик сервера).
                     configManager.reloadAsync(ok ->
-                            sender.sendMessage(speedManager.messages().get(
-                                    ok ? "messages.reloaded" : "messages.reload-failed")));
+                            speedManager.messages().sendMessage(sender,
+                                    ok ? "messages.reloaded" : "messages.reload-failed"));
                     return true;
                 }
                 default:
-                    sender.sendMessage(speedManager.messages().get("messages.wrong-usage"));
+                    speedManager.messages().sendMessage(sender, "messages.wrong-usage");
                     return true;
             }
         } catch (Throwable t) {

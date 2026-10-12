@@ -2,7 +2,9 @@ package dev.qm.qqminecarts.config;
 
 import dev.qm.qqminecarts.QQMinecarts;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.entity.Player;
 
 import java.io.File;
 import java.io.IOException;
@@ -72,14 +74,47 @@ public final class Messages {
     /**
      * Сообщение с префиксом плагина.
      * Плейсхолдеры передаются парами: "level", "3", "speed", "1.00".
+     * Пустое сообщение в lang -> возвращается "".
      */
     public String get(String path, String... placeholderPairs) {
-        return colorize(prefix + replace(raw(path), placeholderPairs));
+        String text = replace(raw(path), placeholderPairs);
+        if (text == null || text.isEmpty()) return "";
+        return colorize(prefix + text);
     }
 
-    /** Сообщение без префикса (например, для экшнбара). */
+    /** Сообщение без префикса (например, для экшнбара).
+     *  Пустое сообщение в lang -> возвращается "". */
     public String getPlain(String path, String... placeholderPairs) {
-        return colorize(replace(raw(path), placeholderPairs));
+        String text = replace(raw(path), placeholderPairs);
+        if (text == null || text.isEmpty()) return "";
+        return colorize(text);
+    }
+
+    /** Переведённое имя моба (messages.mobs.<key>, где key = horse, skeleton-horse...).
+     *  Если перевода нет — возвращается сам ключ (напр. "pig"). Можно красить через '&'. */
+    public String mobName(String key) {
+        String name = lang.getString("messages.mobs." + key, null);
+        if (name == null || name.trim().isEmpty()) {
+            return key;
+        }
+        return colorize(name);
+    }
+
+    /** Отправка чат-сообщения с префиксом. Пустое сообщение НЕ отправляется
+     *  вообще (чтобы можно было отключить любой текст, указав "" в lang). */
+    public void sendMessage(CommandSender target, String path, String... placeholderPairs) {
+        if (target == null) return;
+        String text = replace(raw(path), placeholderPairs);
+        if (text == null || text.isEmpty()) return;
+        target.sendMessage(colorize(prefix + text));
+    }
+
+    /** Отправка экшнбара без префикса. Пустое сообщение НЕ отправляется. */
+    public void sendActionBar(Player target, String path, String... placeholderPairs) {
+        if (target == null) return;
+        String text = replace(raw(path), placeholderPairs);
+        if (text == null || text.isEmpty()) return;
+        target.sendActionBar(LegacyComponentSerializer.legacySection().deserialize(colorize(text)));
     }
 
     private static String replace(String input, String... pairs) {

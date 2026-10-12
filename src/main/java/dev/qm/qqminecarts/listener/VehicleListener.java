@@ -6,13 +6,15 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityDismountEvent;
+import org.bukkit.event.entity.EntityMountEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.vehicle.VehicleEnterEvent;
 import org.bukkit.event.vehicle.VehicleExitEvent;
 
 /**
- * Отслеживает посадку/выход игрока в вагонетку и запускает/останавливает
- * контроль скорости.
+ * Отслеживает посадку/выход игрока в вагонетку или на животное и
+ * запускает/останавливает контроль скорости.
  */
 public final class VehicleListener implements Listener {
 
@@ -34,11 +36,34 @@ public final class VehicleListener implements Listener {
         }
     }
 
+    /** Игрок сел на любое животное/моба (лошадь, свинью, страйдера...). */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onMount(EntityMountEvent event) {
+        try {
+            if (!(event.getEntity() instanceof Player player)) return;
+            if (event.getMount() instanceof Minecart) return; // обрабатывает onEnter
+            manager.attachRide(player, event.getMount());
+        } catch (Throwable t) {
+            log(t);
+        }
+    }
+
     /** Игрок покинул вагонетку. */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onExit(VehicleExitEvent event) {
         try {
             if (!(event.getExited() instanceof Player player)) return;
+            manager.detach(player.getUniqueId());
+        } catch (Throwable t) {
+            log(t);
+        }
+    }
+
+    /** Игрок спешился с любого транспорта (в т.ч. животного). */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onDismount(EntityDismountEvent event) {
+        try {
+            if (!(event.getEntity() instanceof Player player)) return;
             manager.detach(player.getUniqueId());
         } catch (Throwable t) {
             log(t);

@@ -5,6 +5,7 @@ import org.bukkit.boss.BarColor;
 import org.bukkit.boss.BarStyle;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.entity.EntityType;
 
 import java.io.File;
 import java.io.IOException;
@@ -19,6 +20,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.Logger;
+import java.util.stream.Stream;
 
 /**
  * Неизменяемая (immutable) конфигурация плагина.
@@ -28,30 +30,47 @@ import java.util.logging.Logger;
  */
 public final class PluginConfig {
 
-    /** Способ отображения текущей скорости. */
+    /** Способ отображения текущего уровня/скорости. */
     public enum DisplayType {
         ACTIONBAR, // сообщение над хотбаром
         BOSSBAR    // полоса боссбара
     }
 
+    /** Режим управления скоростью.
+     *  MANUAL — клавиша F повышает уровень, пробел сбрасывает.
+     *  AUTO   — удержание W/S (вагонетка) или езда прямо (моб) постепенно
+     *           разгоняет транспорт; у мобов за повороты снимается часть
+     *           скорости (чем резче поворот — тем больше). */
+    public enum MechanicMode {
+        MANUAL,
+        AUTO
+    }
+
     // ---- общие настройки ----
     private final boolean debug;
     private final String language;
-    private final boolean permissionPerLevel;
 
-    // ---- уровни скорости (индекс 0 всегда "default") ----
+    // ---- уровни скорости ----
     private final List<SpeedLevel> speedLevels;
+    private final List<SpeedLevel> poweredSpeedLevels;
     private final double maxSpeed;
+    private final double curveMaxSpeed;
 
-    // ---- триггеры переключения ----
+    // ---- триггеры ----
     private final boolean triggerSwap;
-    private final boolean triggerLeftClick;
+    private final boolean spaceReset;
+    private final long clickCooldownMs;
 
     // ---- плавный разгон / торможение ----
     private final int transitionDelayTicks;
-    private final double transitionStep;
-    private final int transitionIntervalTicks;
-    private final double manualForwardSpeed;
+    private final int transitionRampTicks;
+
+    // ---- режим управления (manual / auto) ----
+    private final MechanicMode mechanicMode;
+    private final int accelTickIntervalTicks;
+    /** Тиков на -1 уровень при бездействии/остановке (вагонетка и моб отдельно). */
+    private final int decelMinecartTickIntervalTicks;
+    private final int decelMobTickIntervalTicks;
 
     // ---- отображение ----
     private final DisplayType displayType;
@@ -64,25 +83,35 @@ public final class PluginConfig {
     // ---- миры-исключения ----
     private final Set<String> disabledWorlds;
 
-    private PluginConfig(boolean debug, String language, boolean permissionPerLevel,
-                         List<SpeedLevel> speedLevels, double maxSpeed,
-                         boolean triggerSwap, boolean triggerLeftClick,
-                         int transitionDelayTicks, double transitionStep, int transitionIntervalTicks,
-                         double manualForwardSpeed,
+    // ---- езда на животных ----
+    private final Map<EntityType, RideMobConfig> rideMobs;
+
+    private PluginConfig(boolean debug, String language,
+                         List<SpeedLevel> speedLevels, List<SpeedLevel> poweredSpeedLevels,
+                         double maxSpeed, double curveMaxSpeed,
+                         boolean triggerSwap, boolean spaceReset, long clickCooldownMs,
+                         int transitionDelayTicks, int transitionRampTicks,
+                         MechanicMode mechanicMode, int accelTickIntervalTicks,
+                         int decelMinecartTickIntervalTicks, int decelMobTickIntervalTicks,
                          DisplayType displayType, int displayUpdateIntervalTicks, boolean displayShowAlways,
                          BarColor bossbarColor, BarStyle bossbarStyle, double bossbarFullProgressAt,
-                         Set<String> disabledWorlds) {
+                         Set<String> disabledWorlds,
+                         Map<EntityType, RideMobConfig> rideMobs) {
         this.debug = debug;
         this.language = language;
-        this.permissionPerLevel = permissionPerLevel;
         this.speedLevels = speedLevels;
+        this.poweredSpeedLevels = poweredSpeedLevels;
         this.maxSpeed = maxSpeed;
+        this.curveMaxSpeed = curveMaxSpeed;
         this.triggerSwap = triggerSwap;
-        this.triggerLeftClick = triggerLeftClick;
+        this.spaceReset = spaceReset;
+        this.clickCooldownMs = clickCooldownMs;
         this.transitionDelayTicks = transitionDelayTicks;
-        this.transitionStep = transitionStep;
-        this.transitionIntervalTicks = transitionIntervalTicks;
-        this.manualForwardSpeed = manualForwardSpeed;
+        this.transitionRampTicks = transitionRampTicks;
+        this.mechanicMode = mechanicMode;
+        this.accelTickIntervalTicks = accelTickIntervalTicks;
+        this.decelMinecartTickIntervalTicks = decelMinecartTickIntervalTicks;
+        this.decelMobTickIntervalTicks = decelMobTickIntervalTicks;
         this.displayType = displayType;
         this.displayUpdateIntervalTicks = displayUpdateIntervalTicks;
         this.displayShowAlways = displayShowAlways;
@@ -90,32 +119,45 @@ public final class PluginConfig {
         this.bossbarStyle = bossbarStyle;
         this.bossbarFullProgressAt = bossbarFullProgressAt;
         this.disabledWorlds = disabledWorlds;
+        this.rideMobs = rideMobs;
     }
 
     // ================== GETTERS ==================
 
     public boolean debug() { return debug; }
     public String language() { return language; }
-    public boolean permissionPerLevel() { return permissionPerLevel; }
 
     public List<SpeedLevel> speedLevels() { return speedLevels; }
-    public int levelCount() { return speedLevels.size(); }
 
-    /** Уровень по индексу (0 = default). */
-    public SpeedLevel level(int index) {
-        return speedLevels.get(index);
-    }
+    /** Уровни скорости для энергорельс (если секции нет — то же, что speed-levels). */
+    public List<SpeedLevel> poweredSpeedLevels() { return poweredSpeedLevels; }
 
-    /** Максимальная настроенная скорость (для прогресс-бара). */
+    public int levelCount() { return Math.max(speedLevels.size(), poweredSpeedLevels.size()); }
     public double maxSpeed() { return maxSpeed; }
 
+    /** Максимальная скорость на повороте (0 = не ограничивать). */
+    public double curveMaxSpeed() { return curveMaxSpeed; }
+
     public boolean triggerSwap() { return triggerSwap; }
-    public boolean triggerLeftClick() { return triggerLeftClick; }
+    public boolean spaceReset() { return spaceReset; }
+    public long clickCooldownMs() { return clickCooldownMs; }
 
     public int transitionDelayTicks() { return transitionDelayTicks; }
-    public double transitionStep() { return transitionStep; }
-    public int transitionIntervalTicks() { return transitionIntervalTicks; }
-    public double manualForwardSpeed() { return manualForwardSpeed; }
+    public int transitionRampTicks() { return transitionRampTicks; }
+
+    public MechanicMode mechanicMode() { return mechanicMode; }
+
+    /** true — режим автоматического разгона (AUTO). */
+    public boolean autoMode() { return mechanicMode == MechanicMode.AUTO; }
+
+    /** Через сколько тиков удержания вперёд/езды прямо прибавляется уровень. */
+    public int accelTickIntervalTicks() { return accelTickIntervalTicks; }
+
+    /** Тиков на -1 уровень, когда вагонетка остановилась/не ведётся (режим AUTO). */
+    public int decelMinecartTickIntervalTicks() { return decelMinecartTickIntervalTicks; }
+
+    /** Тиков на -1 уровень, когда моб не скачет/поворачивается (режим AUTO). */
+    public int decelMobTickIntervalTicks() { return decelMobTickIntervalTicks; }
 
     public DisplayType displayType() { return displayType; }
     public int displayUpdateIntervalTicks() { return displayUpdateIntervalTicks; }
@@ -125,6 +167,17 @@ public final class PluginConfig {
     public double bossbarFullProgressAt() { return bossbarFullProgressAt; }
 
     public Set<String> disabledWorlds() { return disabledWorlds; }
+
+    /** Настройки езды для указанного типа животного (null — тип не в конфиге). */
+    public RideMobConfig rideMob(EntityType type) {
+        return rideMobs.get(type);
+    }
+
+    /** Разрешена ли механика езды на указанном типе животного. */
+    public boolean rideEnabled(EntityType type) {
+        RideMobConfig cfg = rideMob(type);
+        return cfg != null && cfg.enabled();
+    }
 
     // ================== ЗАГРУЗКА ==================
 
@@ -151,45 +204,56 @@ public final class PluginConfig {
         boolean debug = yml.getBoolean("debug", false);
         String language = yml.getString("language", "ru");
         if (language == null || language.trim().isEmpty()) language = "ru";
-        boolean permissionPerLevel = yml.getBoolean("permission-per-level", false);
 
-        List<SpeedLevel> levels = parseLevels(yml, log);
-        double maxSpeed = levels.stream()
-                .filter(sl -> !sl.isDefault())
+        List<SpeedLevel> levels = parseLevels(yml, "speed-levels", log);
+        if (levels.isEmpty()) levels = defaultLevels();
+        List<SpeedLevel> powered = parseLevels(yml, "powered-speed-levels", log);
+        if (powered.isEmpty()) powered = levels;
+
+        double maxSpeed = Stream.concat(levels.stream(), powered.stream())
                 .mapToDouble(SpeedLevel::speed)
                 .filter(v -> v > 0.0)
                 .max()
                 .orElse(1.0);
+        double curveMaxSpeed = Math.max(yml.getDouble("curve-max-speed", 0.7), 0.0);
 
         List<String> triggers = yml.getStringList("cycle-triggers");
         if (triggers.isEmpty()) {
-            triggers = List.of("SWAP", "LEFT_CLICK");
+            triggers = List.of("SWAP");
         }
         boolean triggerSwap = triggers.stream().anyMatch(s -> s.equalsIgnoreCase("SWAP"));
-        boolean triggerLeftClick = triggers.stream()
-                .anyMatch(s -> s.equalsIgnoreCase("LEFT_CLICK") || s.equalsIgnoreCase("LMB"));
 
-        int delayTicks = clampInt(yml.getInt("transition.delay-ticks", 60), 0, 1200);
-        double step = Math.max(yml.getDouble("transition.step", 0.10), 0.0001);
-        int intervalTicks = clampInt(yml.getInt("transition.interval-ticks", 5), 1, 200);
-        double forwardSpeed = Math.max(yml.getDouble("manual.forward-speed", 0.4), 0.0);
+        boolean spaceReset = yml.getBoolean("space-reset", true);
+        long clickCooldownMs = Math.max(yml.getLong("click-cooldown-ms", 300L), 0L);
+
+        int delayTicks = clampInt(yml.getInt("transition.delay-ticks", 0), 0, 1200);
+        int rampTicks = clampInt(yml.getInt("transition.ramp-ticks", 40), 1, 1200);
+
+        MechanicMode mechanicMode = parseMechanicMode(yml.getString("mechanic.mode", "manual"), log);
+        int accelInterval = clampInt(yml.getInt("mechanic.auto.accel-tick-interval", 80), 2, 1200);
+        int decelMinecart = clampInt(yml.getInt("mechanic.auto.decel-minecart-tick-interval", 40), 2, 1200);
+        int decelMob = clampInt(yml.getInt("mechanic.auto.decel-mob-tick-interval", 20), 2, 1200);
 
         DisplayType displayType = parseDisplayType(yml.getString("display.type", "ACTIONBAR"), log);
         int updateInterval = clampInt(yml.getInt("display.update-interval-ticks", 10), 1, 600);
         boolean showAlways = yml.getBoolean("display.show-always", true);
         BarColor barColor = parseBarColor(yml.getString("display.bossbar.color", "BLUE"), log);
         BarStyle barStyle = parseBarStyle(yml.getString("display.bossbar.style", "SEGMENTED_10"), log);
-        double fullProgressAt = Math.max(yml.getDouble("display.bossbar.full-progress-at", 2.0), 0.01);
+        double fullProgressAt = Math.max(yml.getDouble("display.bossbar.full-progress-at", 4.0), 0.01);
 
         Set<String> disabledWorlds = new LinkedHashSet<>(yml.getStringList("disabled-worlds"));
 
-        return new PluginConfig(debug, language, permissionPerLevel,
-                levels, maxSpeed,
-                triggerSwap, triggerLeftClick,
-                delayTicks, step, intervalTicks, forwardSpeed,
+        Map<EntityType, RideMobConfig> rideMobs = parseRideMobs(yml, log);
+
+        return new PluginConfig(debug, language,
+                levels, powered, maxSpeed, curveMaxSpeed,
+                triggerSwap, spaceReset, clickCooldownMs,
+                delayTicks, rampTicks,
+                mechanicMode, accelInterval, decelMinecart, decelMob,
                 displayType, updateInterval, showAlways,
                 barColor, barStyle, fullProgressAt,
-                disabledWorlds);
+                disabledWorlds,
+                rideMobs);
     }
 
     /** Встроенная копия config.yml из jar (фолбэк при отсутствии файла). */
@@ -204,10 +268,10 @@ public final class PluginConfig {
         return new YamlConfiguration();
     }
 
-    /** Парсинг уровней скорости; "default" всегда ставится первым. */
-    private static List<SpeedLevel> parseLevels(YamlConfiguration yml, Logger log) {
+    /** Парсинг уровней скорости из секции (например, speed-levels). */
+    private static List<SpeedLevel> parseLevels(ConfigurationSection parent, String sectionPath, Logger log) {
         Map<String, Double> raw = new LinkedHashMap<>();
-        ConfigurationSection section = yml.getConfigurationSection("speed-levels");
+        ConfigurationSection section = parent == null ? null : parent.getConfigurationSection(sectionPath);
         if (section != null) {
             for (String key : section.getKeys(false)) {
                 Object value = section.get(key);
@@ -218,7 +282,8 @@ public final class PluginConfig {
                     try {
                         speed = Double.parseDouble(String.valueOf(value));
                     } catch (NumberFormatException e) {
-                        log.warning("Некорректная скорость уровня '" + key + "': " + value + ". Уровень пропущен.");
+                        log.warning("Некорректная скорость уровня '" + key + "' в " + sectionPath
+                                + ": " + value + ". Уровень пропущен.");
                         continue;
                     }
                 }
@@ -227,23 +292,135 @@ public final class PluginConfig {
         }
 
         List<SpeedLevel> result = new ArrayList<>();
-        Double def = raw.remove("default");
-        result.add(new SpeedLevel("default", def == null ? 0.0 : def));
         for (Map.Entry<String, Double> entry : raw.entrySet()) {
             boolean exists = result.stream().anyMatch(sl -> sl.key().equalsIgnoreCase(entry.getKey()));
             if (!exists) {
                 result.add(new SpeedLevel(entry.getKey(), entry.getValue()));
             }
         }
-        // Секция полностью пустая — добавляем запасные уровни 1..5
-        if (result.size() <= 1) {
-            result.add(new SpeedLevel("1", 0.4));
-            result.add(new SpeedLevel("2", 0.7));
-            result.add(new SpeedLevel("3", 1.0));
-            result.add(new SpeedLevel("4", 1.3));
-            result.add(new SpeedLevel("5", 1.6));
+        return result;
+    }
+
+    private static List<SpeedLevel> defaultLevels() {
+        List<SpeedLevel> result = new ArrayList<>(5);
+        result.add(new SpeedLevel("1", 0.4));
+        result.add(new SpeedLevel("2", 0.7));
+        result.add(new SpeedLevel("3", 1.0));
+        result.add(new SpeedLevel("4", 1.3));
+        result.add(new SpeedLevel("5", 1.6));
+        return result;
+    }
+
+    // ================== ЕЗДА НА ЖИВОТНЫХ ==================
+
+    /** Все типы животных, поддерживаемые механикой езды. */
+    public static final List<EntityType> RIDE_TYPES = List.of(
+            EntityType.HORSE,
+            EntityType.DONKEY,
+            EntityType.MULE,
+            EntityType.SKELETON_HORSE,
+            EntityType.ZOMBIE_HORSE,
+            EntityType.PIG,
+            EntityType.STRIDER,
+            EntityType.CAMEL,
+            EntityType.CAMEL_HUSK,
+            EntityType.LLAMA,
+            EntityType.TRADER_LLAMA,
+            EntityType.HAPPY_GHAST,
+            EntityType.NAUTILUS,
+            EntityType.ZOMBIE_NAUTILUS);
+
+    /** Ключ типа в конфиге (horse, skeleton-horse, ...). */
+    public static String rideKey(EntityType type) {
+        return type.name().toLowerCase(Locale.ROOT).replace('_', '-');
+    }
+
+    /** Парсинг секции riding. Все типы получают значения по умолчанию,
+     *  явные значения из config.yml перекрывают их. */
+    private static Map<EntityType, RideMobConfig> parseRideMobs(YamlConfiguration yml, Logger log) {
+        Map<EntityType, RideMobConfig> result = new LinkedHashMap<>();
+        for (EntityType type : RIDE_TYPES) {
+            result.put(type, defaultRide(type));
+        }
+
+        ConfigurationSection riding = yml.getConfigurationSection("riding");
+        if (riding == null) {
+            return result;
+        }
+        for (String key : riding.getKeys(false)) {
+            EntityType type = rideType(key);
+            if (type == null) {
+                log.warning("riding: неизвестный тип животного '" + key + "' в секции riding. Игнорирую.");
+                continue;
+            }
+            ConfigurationSection section = riding.getConfigurationSection(key);
+            if (section == null) {
+                continue;
+            }
+            RideMobConfig defaults = defaultRide(type);
+            boolean enabled = section.getBoolean("enabled", defaults.enabled());
+            List<SpeedLevel> levels = parseLevels(section, "speed-levels", log);
+            if (levels.isEmpty()) {
+                levels = defaults.levels();
+            }
+            result.put(type, new RideMobConfig(enabled, levels));
         }
         return result;
+    }
+
+    private static EntityType rideType(String key) {
+        try {
+            return EntityType.valueOf(key.trim().toUpperCase(Locale.ROOT).replace('-', '_'));
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /** Дефолтные настройки езды для типа (включено + 5 уровней прибавки). */
+    private static RideMobConfig defaultRide(EntityType type) {
+        switch (type) {
+            case HORSE:
+            case SKELETON_HORSE:
+            case ZOMBIE_HORSE:
+                return new RideMobConfig(true, rideLevels(0.05, 0.10, 0.15, 0.20, 0.25));
+            case DONKEY:
+            case MULE:
+                return new RideMobConfig(true, rideLevels(0.04, 0.08, 0.12, 0.16, 0.20));
+            case PIG:
+            case STRIDER:
+                return new RideMobConfig(true, rideLevels(0.05, 0.10, 0.15, 0.20, 0.25));
+            case CAMEL:
+            case CAMEL_HUSK:
+                return new RideMobConfig(true, rideLevels(0.04, 0.08, 0.12, 0.16, 0.20));
+            case LLAMA:
+                return new RideMobConfig(true, rideLevels(0.03, 0.06, 0.09, 0.12, 0.15));
+            case TRADER_LLAMA:
+                return new RideMobConfig(false, rideLevels(0.03, 0.06, 0.09, 0.12, 0.15));
+            case HAPPY_GHAST:
+            case NAUTILUS:
+            case ZOMBIE_NAUTILUS:
+                return new RideMobConfig(true, rideLevels(0.05, 0.10, 0.15, 0.20, 0.25));
+            default:
+                return new RideMobConfig(false, rideLevels(0.05, 0.10, 0.15, 0.20, 0.25));
+        }
+    }
+
+    private static List<SpeedLevel> rideLevels(double... speeds) {
+        List<SpeedLevel> result = new ArrayList<>(speeds.length);
+        for (int i = 0; i < speeds.length; i++) {
+            result.add(new SpeedLevel(String.valueOf(i + 1), speeds[i]));
+        }
+        return result;
+    }
+
+    private static MechanicMode parseMechanicMode(String value, Logger log) {
+        if (value == null) return MechanicMode.MANUAL;
+        try {
+            return MechanicMode.valueOf(value.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            log.warning("Неизвестный режим управления '" + value + "' (ожидалось manual/auto). Использую manual.");
+            return MechanicMode.MANUAL;
+        }
     }
 
     private static DisplayType parseDisplayType(String value, Logger log) {
